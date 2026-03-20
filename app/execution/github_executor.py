@@ -130,14 +130,22 @@ class GitHubExecutor(CodeExecutor):
             logger.info("Found workflow: %s (id=%s)", workflow.name, workflow.id)
 
             # ── 4. Dispatch the workflow ─────────────────────────────
+            # GitHub workflow_dispatch inputs have a 65,536 char limit each.
+            MAX_INPUT_LEN = 65000
+            truncated_plan = plan.plan[:MAX_INPUT_LEN] if len(plan.plan) > MAX_INPUT_LEN else plan.plan
+
             dispatch_inputs = {
                 "jira_issue_key": plan.issue_key,
-                "task_title": plan.task_title,
+                "task_title": plan.task_title[:500],
                 "task_type": plan.task_type,
                 "target_paths": plan.target_paths,
-                "plan": plan.plan,
-                "validation_commands": plan.validation_commands,
+                "plan": truncated_plan,
+                "validation_commands": plan.validation_commands or "none",
             }
+
+            # Log input sizes for debugging
+            for k, v in dispatch_inputs.items():
+                logger.debug("  Input '%s': %d chars", k, len(v))
 
             success = workflow.create_dispatch(
                 ref=repo.default_branch,
