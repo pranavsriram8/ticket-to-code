@@ -143,32 +143,28 @@ def expand_scope(
     current_files_list = "\n".join(f"- `{p}`" for p in files.keys())
     siblings_list = "\n".join(siblings_with_preview)
 
-    prompt = f"""You are reviewing files for a DevOps task. You have been given some files to edit,
-but there may be other files in the SAME directory that you also need to read.
+    prompt = f"""You must decide which additional files are needed for this task.
 
-## Task
-**Title:** {task_title}
-**Type:** {task_type}
+Task: {task_title} (type: {task_type})
 
-## Execution Plan
-{plan}
-
-## Files You Already Have
+Files already included:
 {current_files_list}
 
-## Other Files Available in the Same Directory (with previews)
+Other files available (with first 5 lines):
 {siblings_list}
 
-## Question
-Which of the "other files available" do you ALSO need to read to complete this task correctly?
+RULES:
+- Only select files whose CONTENT is relevant (check the previews)
+- Look for: data sources, AMI references, version pins, variables used by target resources
+- Do NOT explain your reasoning
 
-Look at the PREVIEW of each file — check if it contains:
-- Data sources (data blocks) that reference AMIs, versions, or parameters used by the target resources
-- Variables or locals that feed into the resources being changed
-- Related module calls or resource definitions
+RESPOND WITH EXACTLY ONE LINE containing either:
+- A comma-separated list of full file paths (copy exactly from the list above)
+- The word NONE
 
-Return ONLY a comma-separated list of file paths from the "Other Files Available" list.
-If you don't need any additional files, return exactly: NONE"""
+Example valid responses:
+path/to/file1.tf,path/to/file2.tf
+NONE"""
 
     response = litellm.completion(
         model=model,
@@ -184,19 +180,26 @@ If you don't need any additional files, return exactly: NONE"""
         logger.info("No scope expansion needed.")
         return files
 
-    # Parse and read additional files
+    # Parse response — only accept tokens that look like file paths
+    # (must contain '/' and exist in the sibling set)
     sibling_set = set(sibling_files)
     expanded = dict(files)  # Copy existing files
-    for path in answer.split(","):
-        path = path.strip().strip("`").strip()
-        if path in sibling_set:
-            abs_path = repo_root / path
+
+    # Take only the first line to avoid parsing prose
+    first_line = answer.split("\n")[0].strip()
+    
+    for token in first_line.split(","):
+        token = token.strip().strip("`").strip()
+        if not token or "/" not in token:
+            continue  # Skip prose fragments
+        if token in sibling_set:
+            abs_path = repo_root / token
             if abs_path.is_file():
                 content = abs_path.read_text(encoding="utf-8", errors="replace")
-                expanded[path] = content
-                logger.info("📄 Scope expanded: %s (%d bytes)", path, len(content))
-        elif path and path.upper() != "NONE":
-            logger.warning("⚠️  Expansion requested unknown file: %s — skipping", path)
+                expanded[token] = content
+                logger.info("📄 Scope expanded: %s (%d bytes)", token, len(content))
+        else:
+            logger.warning("⚠️  Expansion requested unknown file: %s — skipping", token)
 
     logger.info("Scope: %d → %d files after expansion", len(files), len(expanded))
     return expanded
@@ -237,6 +240,8 @@ Your job is to produce the EDITED versions of these files according to the plan.
 - If a file doesn't need changes, still include it unchanged.
 - Do NOT add any commentary outside the file blocks.
 - Do NOT create new files unless the plan explicitly says to.
+- IMPORTANT: If you create a reference to a resource (e.g., data source, variable, module) that doesn't exist yet in any of the provided files, you MUST create it. Check all provided files before assuming a dependency exists.
+- For version upgrades: if the current version has a corresponding data source (e.g., AMI lookup for K8s 1.33), create an equivalent data source for the new version (e.g., 1.34).
 
 ## Output Format
 For each file, output exactly:
