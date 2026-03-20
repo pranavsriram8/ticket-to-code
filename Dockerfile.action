@@ -5,8 +5,8 @@
 # workflow uses: pranavsriram8/ticket-to-code@main
 #
 # It reads target files, sends them + a plan to
-# Claude, writes edits back, validates, commits,
-# and opens a Pull Request.
+# Claude, writes edits back, commits, and opens
+# a Pull Request.
 
 FROM python:3.12-slim
 

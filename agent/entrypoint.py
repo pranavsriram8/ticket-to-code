@@ -532,12 +532,7 @@ def main() -> None:
         branch_name, target_paths_str, plan, validation_commands,
     )
 
-    # ── 5. Run validation commands ───────────────────────────────
-    logger.info("── Running validation ──")
-    validation_output = run_validation(validation_commands)
-    logger.info(validation_output)
-
-    # ── 6. Commit and push ───────────────────────────────────────
+    # ── 5. Commit and push ───────────────────────────────────────
     logger.info("── Committing and pushing ──")
     pushed = git_commit_and_push(
         repo_root, branch_name, jira_key, task_title, task_type,
@@ -549,11 +544,11 @@ def main() -> None:
         logger.info("No changes detected — skipping PR creation.")
         return
 
-    # ── 7. Create Pull Request ───────────────────────────────────
+    # ── 6. Create Pull Request ───────────────────────────────────
     logger.info("── Creating Pull Request ──")
     create_pull_request(
         jira_key, task_title, task_type, target_paths_str,
-        plan, validation_output, branch_name, base_branch,
+        plan, "", branch_name, base_branch,
     )
 
     logger.info("═══════════════════════════════════════════")
