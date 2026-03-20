@@ -1,0 +1,35 @@
+# ──────────────────────────────────────────────
+# ticket-to-code — Local Development / Testing
+# ──────────────────────────────────────────────
+# Usage:
+#   docker compose up --build        # Build and start
+#   docker compose up -d             # Detached mode
+#   docker compose logs -f           # Follow logs
+#   docker compose down              # Stop and remove
+#
+# The service reads your .env file for all configuration.
+# Make sure .env exists (cp .env.example .env) and is filled in.
+
+services:
+  ticket-to-code:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ticket-to-code
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Override log level for local dev
+      - LOG_LEVEL=DEBUG
+    volumes:
+      # Mount AWS credentials so AWS_PROFILE works inside the container
+      - ~/.aws:/home/appuser/.aws:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

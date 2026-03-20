@@ -1,0 +1,25 @@
+# ── Docker build context exclusions ───────────
+# Keep the build context small and avoid leaking secrets.
+
+.env
+.env.*
+!.env.example
+
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+.git/
+.gitignore
+
+*.md
+LICENSE
+
+.vscode/
+.idea/
+
+# Test/dev files
+scripts/test_*.py
+tests/

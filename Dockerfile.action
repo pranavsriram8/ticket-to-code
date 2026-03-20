@@ -1,0 +1,28 @@
+# ──────────────────────────────────────────────
+# TicketToCode Agent — GitHub Action Docker Image
+# ──────────────────────────────────────────────
+# This image runs inside GitHub Actions when the
+# workflow uses: pranavsriram8/ticket-to-code@main
+#
+# It reads target files, sends them + a plan to
+# Claude, writes edits back, validates, commits,
+# and opens a Pull Request.
+
+FROM python:3.12-slim
+
+# Install git (needed for branch/commit/push operations)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends git && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY requirements.action.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+# Copy the agent code
+COPY agent/ /agent/
+
+# GitHub Actions mounts the repo at /github/workspace
+WORKDIR /github/workspace
+
+ENTRYPOINT ["python", "/agent/entrypoint.py"]

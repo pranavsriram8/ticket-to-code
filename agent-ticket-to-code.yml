@@ -1,0 +1,84 @@
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TicketToCode Agent — Triggered by ticket-to-code server
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Receives a Jira task plan via workflow_dispatch, runs the AI agent
+# (packaged as a Docker-based GitHub Action), and opens a PR.
+#
+# INSTALLATION:
+#   Copy this file into your target monorepo at:
+#     .github/workflows/agent-ticket-to-code.yml
+#
+# REQUIRED SECRETS (set in repo Settings → Secrets):
+#   - AWS_ACCESS_KEY_ID       (for Bedrock / Terraform)
+#   - AWS_SECRET_ACCESS_KEY   (for Bedrock / Terraform)
+#
+# The GITHUB_TOKEN is automatically provided by GitHub Actions.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+name: "TicketToCode Agent"
+
+on:
+  workflow_dispatch:
+    inputs:
+      jira_issue_key:
+        description: "Jira issue key (e.g., INFRA-42)"
+        required: true
+        type: string
+      task_title:
+        description: "Task title / summary"
+        required: true
+        type: string
+      task_type:
+        description: "Classified task type (terraform, helm, ansible, service, script)"
+        required: true
+        type: string
+      target_paths:
+        description: "Comma-separated target file/directory paths"
+        required: true
+        type: string
+      plan:
+        description: "Step-by-step execution plan from DSPy router"
+        required: true
+        type: string
+      validation_commands:
+        description: "Comma-separated safe validation commands"
+        required: true
+        type: string
+
+concurrency:
+  group: ticket-to-code-${{ github.event.inputs.jira_issue_key }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  execute-task:
+    name: "Execute TicketToCode Task"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: "Checkout repository"
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: "Run TicketToCode Agent"
+        uses: pranavsriram8/ticket-to-code@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          jira-issue-key: ${{ github.event.inputs.jira_issue_key }}
+          task-title: ${{ github.event.inputs.task_title }}
+          task-type: ${{ github.event.inputs.task_type }}
+          target-paths: ${{ github.event.inputs.target_paths }}
+          plan: ${{ github.event.inputs.plan }}
+          validation-commands: ${{ github.event.inputs.validation_commands }}
+          model: "bedrock/eu.anthropic.claude-sonnet-4-6"
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-west-1
+          base-branch: master
+          git-author-name: "TicketToCode Agent"
+          git-author-email: "ticket-to-code@your-company.com"

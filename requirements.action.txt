@@ -1,0 +1,4 @@
+# Agent dependencies (GitHub Action)
+litellm>=1.40.0
+boto3>=1.34.0
+PyGithub>=2.3.0
