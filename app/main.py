@@ -96,6 +96,59 @@ async def health_check() -> dict[str, str]:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  Dry Run — Route + Scope only (no GitHub Actions dispatch)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+from pydantic import BaseModel
+
+
+class DryRunRequest(BaseModel):
+    task_title: str
+    task_description: str = ""
+
+
+@app.post("/api/dry-run", summary="Dry run: Route + Scope (no dispatch)", tags=["testing"])
+async def dry_run(req: DryRunRequest) -> dict:
+    """
+    Runs the full Router + Scope Identifier pipeline but does NOT dispatch
+    to GitHub Actions. Returns the plan + identified target paths.
+
+    Use this to test that scope identification finds the right files.
+    """
+    import asyncio
+    from app.coordination.router import VALID_TASK_TYPES, get_router
+    from app.coordination.scope_identifier import identify_scope
+
+    # Step 1: Route
+    router = get_router()
+    prediction = await asyncio.to_thread(
+        router.route,
+        task_title=req.task_title,
+        task_description=req.task_description,
+    )
+
+    task_type = prediction.task_type.strip().lower()
+    if task_type not in VALID_TASK_TYPES:
+        task_type = "unknown"
+
+    # Step 2: Scope identification
+    target_paths = await asyncio.to_thread(
+        identify_scope,
+        task_title=req.task_title,
+        task_type=task_type,
+        plan=prediction.plan,
+    )
+
+    return {
+        "task_type": task_type,
+        "router_target_paths": prediction.target_paths,
+        "scope_identified_paths": target_paths,
+        "plan": prediction.plan,
+        "validation_commands": prediction.safe_validation_commands,
+    }
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  Jira Webhook (Primary Trigger)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 

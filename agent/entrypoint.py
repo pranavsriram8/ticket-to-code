@@ -26,6 +26,7 @@ from pathlib import Path
 import litellm
 from github import Auth, Github
 
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s │ %(levelname)-8s │ %(message)s",
@@ -81,6 +82,113 @@ def read_target_files(repo_root: Path, target_paths: list[str]) -> dict[str, str
         else:
             logger.warning("⚠️  Target not found: %s", rel_path.strip())
     return files
+
+
+def expand_scope(
+    repo_root: Path,
+    files: dict[str, str],
+    task_title: str,
+    task_type: str,
+    plan: str,
+    model: str,
+) -> dict[str, str]:
+    """
+    Scope Expansion — ask Claude if it needs sibling files in the same directory.
+
+    Agent 1 identified files by filename only. Now that Agent 2 has the actual
+    file contents, Claude may realize it needs additional files in the SAME
+    directory (e.g., data.compute.ec2.tf that wasn't obvious from the name).
+
+    This ONLY looks at sibling files — never goes outside the target directory.
+    """
+    if not files:
+        return files
+
+    # Find the common parent directory of all target files
+    parent_dirs = set()
+    for path in files:
+        parent_dirs.add(str(Path(path).parent))
+
+    # List sibling files in each parent directory (that we don't already have)
+    sibling_files = []
+    for parent_dir in parent_dirs:
+        abs_dir = repo_root / parent_dir
+        if not abs_dir.is_dir():
+            continue
+        for f in sorted(abs_dir.iterdir()):
+            if f.is_file() and f.suffix in {
+                ".tf", ".tfvars", ".yaml", ".yml", ".json",
+                ".go", ".sh", ".py", ".tpl", ".j2",
+            }:
+                rel = str(f.relative_to(repo_root))
+                if rel not in files:
+                    sibling_files.append(rel)
+
+    if not sibling_files:
+        logger.info("No additional sibling files available — scope unchanged.")
+        return files
+
+    # Ask Claude which siblings it needs
+    current_files_list = "\n".join(f"- `{p}`" for p in files.keys())
+    siblings_list = "\n".join(f"- `{p}`" for p in sibling_files)
+
+    prompt = f"""You are reviewing files for a DevOps task. You have been given some files to edit,
+but there may be other files in the SAME directory that you also need to read.
+
+## Task
+**Title:** {task_title}
+**Type:** {task_type}
+
+## Execution Plan
+{plan}
+
+## Files You Already Have
+{current_files_list}
+
+## Other Files Available in the Same Directory
+{siblings_list}
+
+## Question
+Which of the "other files available" do you ALSO need to read to complete this task correctly?
+
+Think about:
+- Data sources that reference the resource being changed
+- Files that define AMIs, versions, or parameters used by the target resources
+- Related configuration that might need updating
+
+Return ONLY a comma-separated list of file paths from the "Other Files Available" list.
+If you don't need any additional files, return exactly: NONE"""
+
+    response = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=500,
+        temperature=0.0,
+    )
+
+    answer = response.choices[0].message.content.strip()
+    logger.info("Scope expansion response: %s", answer)
+
+    if answer.upper().strip() == "NONE":
+        logger.info("No scope expansion needed.")
+        return files
+
+    # Parse and read additional files
+    sibling_set = set(sibling_files)
+    expanded = dict(files)  # Copy existing files
+    for path in answer.split(","):
+        path = path.strip().strip("`").strip()
+        if path in sibling_set:
+            abs_path = repo_root / path
+            if abs_path.is_file():
+                content = abs_path.read_text(encoding="utf-8", errors="replace")
+                expanded[path] = content
+                logger.info("📄 Scope expanded: %s (%d bytes)", path, len(content))
+        elif path and path.upper() != "NONE":
+            logger.warning("⚠️  Expansion requested unknown file: %s — skipping", path)
+
+    logger.info("Scope: %d → %d files after expansion", len(files), len(expanded))
+    return expanded
 
 
 def build_prompt(
@@ -360,15 +468,24 @@ def main() -> None:
     logger.info("Task: %s", task_title)
     logger.info("Type: %s", task_type)
     logger.info("Model: %s", model)
+
     logger.info("Targets: %s", target_paths)
 
     # ── 1. Read target files ─────────────────────────────────────
+    # Scope identification already happened in Agent 1 (server-side)
+    # via GitHub Trees API + LLM. We receive exact, validated paths.
     logger.info("── Reading target files ──")
     files = read_target_files(repo_root, target_paths)
 
     if not files:
         logger.error("No target files found! Cannot proceed.")
         sys.exit(1)
+
+    # ── 1b. Scope Expansion ──────────────────────────────────────
+    # Agent 2 has the full repo. Ask Claude if it needs sibling files
+    # that Agent 1 may have missed (it only saw filenames, not contents).
+    logger.info("── Checking if broader scope needed ──")
+    files = expand_scope(repo_root, files, task_title, task_type, plan, model)
 
     # ── 2. Send to Claude ────────────────────────────────────────
     logger.info("── Sending to Claude ──")
