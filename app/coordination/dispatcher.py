@@ -125,6 +125,14 @@ async def process_ticket_task(
     )
 
     # ── Step 3: Build platform-agnostic execution plan ────────────────
+    # Fix validation commands — the router guesses paths (often wrong).
+    # Rewrite them using the REAL scope-identified paths.
+    validation_commands = _fix_validation_paths(
+        prediction.safe_validation_commands,
+        target_paths,
+        task_type,
+    )
+
     plan = ExecutionPlan(
         issue_key=jira_issue_key,
         task_title=task_title,
@@ -132,7 +140,7 @@ async def process_ticket_task(
         task_type=task_type,
         target_paths=target_paths,
         plan=prediction.plan,
-        validation_commands=prediction.safe_validation_commands,
+        validation_commands=validation_commands,
         source_platform=source_platform,
     )
 
@@ -163,3 +171,63 @@ async def process_ticket_task(
         )
 
     return result
+
+
+def _fix_validation_paths(
+    raw_commands: str,
+    scope_paths: str,
+    task_type: str,
+) -> str:
+    """
+    Rewrite validation commands to use real scope-identified paths.
+
+    The router guesses paths like 'infra/terraform/acceptance/eks/' but
+    the scope identifier found the real path. We derive the correct
+    working directory from the scope paths and rewrite accordingly.
+    """
+    if not scope_paths:
+        return raw_commands
+
+    # Find the common directory from scope-identified paths
+    paths = [p.strip() for p in scope_paths.split(",") if p.strip()]
+    if not paths:
+        return raw_commands
+
+    # Get the common parent directory
+    from pathlib import PurePosixPath
+    parents = [str(PurePosixPath(p).parent) for p in paths]
+    common = parents[0]
+    for p in parents[1:]:
+        # Find common prefix
+        common_parts = common.split("/")
+        p_parts = p.split("/")
+        shared = []
+        for a, b in zip(common_parts, p_parts):
+            if a == b:
+                shared.append(a)
+            else:
+                break
+        common = "/".join(shared)
+
+    if not common:
+        return raw_commands
+
+    logger.info("Validation path fix: using working directory '%s'", common)
+
+    # Build validation commands based on task type and real path
+    if task_type == "terraform":
+        return ",".join([
+            f"terraform fmt -check {common}",
+        ])
+    elif task_type == "helm":
+        return ",".join([
+            f"helm lint {common}",
+            f"helm template {common}",
+        ])
+    elif task_type == "ansible":
+        return ",".join([
+            f"ansible-lint {common}",
+        ])
+    else:
+        # Return original for unknown types
+        return raw_commands

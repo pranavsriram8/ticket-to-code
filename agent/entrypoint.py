@@ -37,8 +37,6 @@ logger = logging.getLogger("ticket-to-code-agent")
 # ── Command allowlist for validation ──────────────────────────────────
 ALLOWED_COMMANDS = [
     "terraform fmt",
-    "terraform validate",
-    "terraform plan",
     "terraform init",
     "helm lint",
     "helm template",
@@ -128,9 +126,22 @@ def expand_scope(
         logger.info("No additional sibling files available — scope unchanged.")
         return files
 
-    # Ask Claude which siblings it needs
+    # Show Claude a preview of each sibling (first 5 lines) so it can
+    # decide based on CONTENT, not just filename
+    siblings_with_preview = []
+    for sib in sibling_files:
+        abs_sib = repo_root / sib
+        preview = ""
+        if abs_sib.is_file():
+            try:
+                lines = abs_sib.read_text(encoding="utf-8", errors="replace").splitlines()[:5]
+                preview = "\n    ".join(lines)
+            except Exception:
+                preview = "(could not read)"
+        siblings_with_preview.append(f"- `{sib}`\n    ```\n    {preview}\n    ```")
+
     current_files_list = "\n".join(f"- `{p}`" for p in files.keys())
-    siblings_list = "\n".join(f"- `{p}`" for p in sibling_files)
+    siblings_list = "\n".join(siblings_with_preview)
 
     prompt = f"""You are reviewing files for a DevOps task. You have been given some files to edit,
 but there may be other files in the SAME directory that you also need to read.
@@ -145,16 +156,16 @@ but there may be other files in the SAME directory that you also need to read.
 ## Files You Already Have
 {current_files_list}
 
-## Other Files Available in the Same Directory
+## Other Files Available in the Same Directory (with previews)
 {siblings_list}
 
 ## Question
 Which of the "other files available" do you ALSO need to read to complete this task correctly?
 
-Think about:
-- Data sources that reference the resource being changed
-- Files that define AMIs, versions, or parameters used by the target resources
-- Related configuration that might need updating
+Look at the PREVIEW of each file — check if it contains:
+- Data sources (data blocks) that reference AMIs, versions, or parameters used by the target resources
+- Variables or locals that feed into the resources being changed
+- Related module calls or resource definitions
 
 Return ONLY a comma-separated list of file paths from the "Other Files Available" list.
 If you don't need any additional files, return exactly: NONE"""
@@ -352,6 +363,9 @@ def git_commit_and_push(
             capture_output=True,
             text=True,
         )
+
+    # Fix dubious ownership (GH Actions runs as different user)
+    run_git("config", "--global", "--add", "safe.directory", str(repo_root))
 
     # Configure git
     run_git("config", "user.name", author_name)
