@@ -4,21 +4,22 @@ ticket-to-code — Jira Webhook Verification & Parsing
 Provides a FastAPI dependency that:
 
     1. Optionally verifies incoming Jira webhook payloads using a shared
-       secret (HMAC-SHA256), if JIRA_WEBHOOK_SECRET is configured.
+       secret token, if JIRA_WEBHOOK_SECRET is configured.
     2. Returns the raw body bytes for downstream parsing.
 
-Jira Cloud webhooks don't natively send HMAC signatures the same way
-GitHub does.  However, if you set up Jira Automation or a proxy that
-adds an `x-hub-signature-256` header (common pattern), we verify it.
+Jira Cloud webhooks support a secret token appended to the webhook URL:
+    https://your-server/api/webhooks/jira?token=<your-secret>
 
-If no secret is configured, we skip verification (useful during
-development).  In production you should always set a secret or
-restrict access by IP / API gateway.
+Jira sends requests to this URL as-is, so we validate the `token`
+query parameter against the configured secret.
+
+If no secret is configured, we skip verification (dev mode).
+In production you should always set JIRA_WEBHOOK_SECRET and configure
+the Jira webhook URL to include ?token=<secret>.
 """
 
 from __future__ import annotations
 
-import hashlib
 import hmac
 import logging
 
@@ -37,9 +38,8 @@ async def verify_jira_webhook(
     FastAPI dependency that authenticates an incoming Jira webhook.
 
     If `JIRA_WEBHOOK_SECRET` is configured:
-        - Reads the raw body.
-        - Checks for an `x-hub-signature-256` header.
-        - Verifies the HMAC-SHA256 digest.
+        - Validates the `token` query parameter against the secret.
+        - Rejects requests with a missing or wrong token (403).
 
     If the secret is empty/unset:
         - Logs a warning and passes through (dev mode).
@@ -56,37 +56,30 @@ async def verify_jira_webhook(
     if not secret:
         logger.warning(
             "JIRA_WEBHOOK_SECRET is not set — skipping signature verification. "
-            "Set this in production!"
+            "Set JIRA_WEBHOOK_SECRET and configure the Jira webhook URL as: "
+            "/api/webhooks/jira?token=<your-secret>"
         )
         return body
 
-    # ── 3. Get the signature header ──────────────────────────────────
-    signature_header: str | None = request.headers.get("x-hub-signature-256")
+    # ── 3. Get the token query parameter ─────────────────────────────
+    # Jira Cloud appends the token to the webhook URL, e.g.:
+    #   https://your-server/api/webhooks/jira?token=mysecret
+    token = request.query_params.get("token", "")
 
-    if signature_header is None:
-        logger.warning("Jira webhook request missing x-hub-signature-256 header.")
+    if not token:
+        logger.warning("Jira webhook request missing ?token= query parameter.")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Missing x-hub-signature-256 header.",
+            detail="Missing token query parameter.",
         )
 
-    # ── 4. Compute expected HMAC ─────────────────────────────────────
-    expected_signature = (
-        "sha256="
-        + hmac.new(
-            key=secret.encode("utf-8"),
-            msg=body,
-            digestmod=hashlib.sha256,
-        ).hexdigest()
-    )
-
-    # ── 5. Constant-time comparison ──────────────────────────────────
-    if not hmac.compare_digest(expected_signature, signature_header):
-        logger.warning("Jira webhook signature mismatch — rejecting request.")
+    # ── 4. Constant-time comparison ──────────────────────────────────
+    if not hmac.compare_digest(secret, token):
+        logger.warning("Jira webhook token mismatch — rejecting request.")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Invalid webhook signature.",
+            detail="Invalid webhook token.",
         )
 
-    logger.debug("Jira webhook signature verified successfully.")
+    logger.debug("Jira webhook token verified successfully.")
     return body

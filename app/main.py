@@ -116,6 +116,7 @@ async def dry_run(req: DryRunRequest) -> dict:
     Use this to test that scope identification finds the right files.
     """
     import asyncio
+    from app.coordination.dispatcher import _extract_template_paths
     from app.coordination.router import VALID_TASK_TYPES, get_router
     from app.coordination.scope_identifier import identify_scope
 
@@ -131,12 +132,16 @@ async def dry_run(req: DryRunRequest) -> dict:
     if task_type not in VALID_TASK_TYPES:
         task_type = "unknown"
 
-    # Step 2: Scope identification
+    # Step 2: Extract seed paths from template (if present)
+    seed_paths = _extract_template_paths(req.task_description)
+
+    # Step 3: Scope identification
     target_paths = await asyncio.to_thread(
         identify_scope,
         task_title=req.task_title,
         task_type=task_type,
         plan=prediction.plan,
+        seed_paths=seed_paths,
     )
 
     return {

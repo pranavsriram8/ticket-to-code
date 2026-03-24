@@ -19,6 +19,7 @@ Architecture:
 
 import asyncio
 import logging
+import re
 
 from app.coordination.router import VALID_TASK_TYPES, get_router
 from app.coordination.scope_identifier import identify_scope
@@ -27,6 +28,41 @@ from app.execution.base import ExecutionPlan, ExecutionResult
 from app.execution.factory import get_executor
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_template_paths(description: str) -> list[str]:
+    """
+    Parse paths from the '## Where (known files/paths)' section of the
+    TicketToCode issue template.
+
+    Returns a list of repo-relative paths (e.g. ['svc/my-service/internal/main.go']).
+    Returns empty list if section not found or description is unstructured.
+    """
+    if not description or "## Where" not in description:
+        return []
+
+    # Find the section and extract lines until the next ## heading
+    match = re.search(
+        r"##\s+Where[^\n]*\n(.*?)(?=\n##|\Z)",
+        description,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if not match:
+        return []
+
+    section = match.group(1)
+    paths = []
+    for line in section.splitlines():
+        line = line.strip().lstrip("-").strip()
+        if not line or line.startswith("#"):
+            continue
+        # Accept lines that look like repo paths (contain a '/')
+        # This includes both file paths (e.g. svc/my-service/internal/db.go)
+        # and directory paths (e.g. svc/my-service/ or svc/my-service)
+        if "/" in line:
+            paths.append(line)
+
+    return paths
 
 
 async def process_ticket_task(
@@ -96,6 +132,14 @@ async def process_ticket_task(
         len(prediction.plan),
     )
 
+    # ── Extract seed paths from structured template (optional) ────────
+    # If the description contains a "## Where (known files/paths)" section,
+    # extract those paths and pass them to scope_identifier as hints.
+    # This avoids blind tree navigation for service tasks with 80+ siblings.
+    seed_paths = _extract_template_paths(task_description)
+    if seed_paths:
+        logger.info("📌 Template seed paths for %s: %s", jira_issue_key, seed_paths)
+
     # ── Step 2: Scope Identification (GitHub Trees API + LLM) ─────────
     # Fetches the full repo file tree via API (no clone needed), then
     # asks the LLM which files need to change based on the plan.
@@ -105,6 +149,7 @@ async def process_ticket_task(
             task_title=task_title,
             task_type=task_type,
             plan=prediction.plan,
+            seed_paths=seed_paths,
         )
     except Exception as exc:
         logger.error(

@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 _RELEVANT_EXTENSIONS = {
     ".tf", ".tfvars", ".yaml", ".yml", ".json",
     ".go", ".sh", ".py", ".tpl", ".j2", ".hcl",
+    ".sql",  # DB migration/schema files
 }
 
 # Directories to always skip
@@ -41,7 +42,8 @@ _SKIP_DIRS = {
 }
 
 # Max depth for tree navigation before forcing a recursive fetch
-_MAX_NAV_DEPTH = 5
+# Service tasks can be nested 6+ levels deep (e.g. svc/my-service/internal/database)
+_MAX_NAV_DEPTH = 7
 
 
 # ── GitHub Tree helpers ───────────────────────────────────────────────
@@ -135,6 +137,10 @@ def fetch_subtree_recursive(
         for item in subtree.tree:
             if item.type != "blob":
                 continue
+            # Skip any path that contains a directory we want to ignore
+            path_parts = set(PurePosixPath(item.path).parts)
+            if path_parts & _SKIP_DIRS:
+                continue
             suffix = PurePosixPath(item.path).suffix
             if suffix in _RELEVANT_EXTENSIONS:
                 full_path = f"{subtree_path}/{item.path}"
@@ -223,12 +229,17 @@ def identify_scope(
     plan: str,
     repo_name: str | None = None,
     branch: str = "master",
+    seed_paths: list[str] | None = None,
 ) -> str:
     """
     Generalized scope identification.
 
+    If seed_paths are provided (from the TicketToCode issue template's
+    '## Where' section), derive the target directories from those paths
+    and skip the blind tree navigation entirely.
+
     Phase 1 — Navigate: LLM browses the tree level by level to find
-              the right directory.
+              the right directory (skipped if seed_paths provided).
     Phase 2 — Identify: Recursive fetch of that directory, LLM picks
               exact files.
 
@@ -242,8 +253,62 @@ def identify_scope(
         logger.warning("No GITHUB_REPO configured — cannot identify scope.")
         return ""
 
-    # ── Phase 1: Navigate the tree ───────────────────────────────────
-    # Start at repo root, let the LLM drill down level by level.
+    # ── Phase 1: Navigate the tree (or use seed paths directly) ──────
+    if seed_paths:
+        # Separate file paths from directory paths.
+        # - File paths (have an extension): trust and return directly.
+        # - Directory paths (no extension): fetch recursively and let LLM pick files.
+        file_seeds = [p for p in seed_paths if "." in PurePosixPath(p).name]
+        dir_seeds = [p for p in seed_paths if "." not in PurePosixPath(p).name]
+
+        if not dir_seeds:
+            # All seeds are exact files — return directly.
+            result = ",".join(file_seeds)
+            logger.info("📌 Using template seed paths directly: %s", result)
+            return result
+
+        # At least one directory seed — fetch it recursively and identify files.
+        logger.info("📌 Directory seeds detected — fetching subtrees: %s", dir_seeds)
+        all_files: list[str] = list(file_seeds)  # start with any known exact files
+        for d in dir_seeds:
+            subtree_files = fetch_subtree_recursive(repo, d.rstrip("/"), branch)
+            all_files.extend(subtree_files)
+
+        if not all_files:
+            logger.error("No files found under directory seeds: %s", dir_seeds)
+            return ",".join(file_seeds) if file_seeds else ""
+
+        MAX_FILES_FOR_LLM = 300
+        if len(all_files) > MAX_FILES_FOR_LLM:
+            logger.warning("⚠️  Too many files (%d) — truncating to %d", len(all_files), MAX_FILES_FOR_LLM)
+            all_files = all_files[:MAX_FILES_FOR_LLM]
+
+        logger.info("🎯 Phase 2 (from dir seeds): Sending %d files to LLM...", len(all_files))
+        file_listing = "\n".join(all_files)
+        predictor = dspy.Predict(IdentifyFiles)
+        prediction = predictor(
+            task_title=task_title,
+            task_type=task_type,
+            plan=plan,
+            file_listing=file_listing,
+        )
+
+        raw = prediction.target_paths.strip()
+        index_set = set(all_files)
+        validated = []
+        for path in raw.split(","):
+            path = path.strip().strip("`").strip()
+            if path in index_set:
+                validated.append(path)
+                logger.info("✅ Scope: %s", path)
+            elif path:
+                logger.warning("⚠️  Unknown path: %s — skipping", path)
+
+        result = ",".join(validated)
+        logger.info("🎯 Final scope (%d files): %s", len(validated), result)
+        return result
+
+    # Fall back to LLM tree navigation
     target_dirs = _navigate_to_target(repo, branch, task_title, task_type)
 
     if not target_dirs:
@@ -260,6 +325,17 @@ def identify_scope(
     if not all_files:
         logger.error("No files found in target directories: %s", target_dirs)
         return ""
+
+    # Cap file listing to avoid context window overflow.
+    # If we have too many files the navigation went too high — truncate.
+    MAX_FILES_FOR_LLM = 300
+    if len(all_files) > MAX_FILES_FOR_LLM:
+        logger.warning(
+            "⚠️  Too many files (%d) — truncating to %d for LLM. "
+            "Navigation may have stopped too high.",
+            len(all_files), MAX_FILES_FOR_LLM,
+        )
+        all_files = all_files[:MAX_FILES_FOR_LLM]
 
     logger.info("🎯 Phase 2: Sending %d files to LLM for exact identification...", len(all_files))
 

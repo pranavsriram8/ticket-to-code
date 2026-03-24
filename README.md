@@ -56,15 +56,14 @@ The scope identifier is the key innovation — it finds exact file paths in any 
 **How it works:**
 ```
 Phase 1 — Navigate (LLM browses the tree like a file browser):
-  Depth 0: (root)         → LLM picks: peaks/
-  Depth 1: peaks/         → LLM picks: terraform/
+  Depth 0: (root)         → LLM picks: infra/
+  Depth 1: infra/         → LLM picks: terraform/
   Depth 2: terraform/     → LLM picks: providers/
   Depth 3: providers/     → LLM picks: aws/
-  Depth 4: aws/           → LLM picks: acceptance/
   (reached target directory)
 
 Phase 2 — Identify (recursive fetch of that directory):
-  → 23 files in acceptance/ sent to LLM
+  → 23 files in infra/ sent to LLM
   → LLM picks: module.containers.eks.tf, locals.tf, variables.tf, etc.
 ```
 
@@ -147,8 +146,8 @@ Test the full Router + Scope Identifier pipeline **without triggering GitHub Act
 curl -s -X POST http://localhost:8000/api/dry-run \
   -H "Content-Type: application/json" \
   -d '{
-    "task_title": "Upgrade Acceptance EKS cluster to Kubernetes 1.34",
-    "task_description": "Upgrade acceptance-backend-cluster from K8s 1.33 to 1.34. Update cluster_version in terraform."
+    "task_title": "Upgrade EKS cluster to Kubernetes 1.34",
+    "task_description": "Upgrade backend-cluster from K8s 1.33 to 1.34. Update cluster_version in terraform."
   }' | python3 -m json.tool
 ```
 
@@ -158,7 +157,7 @@ curl -s -X POST http://localhost:8000/api/dry-run \
 {
   "task_type": "terraform",
   "router_target_paths": "(guessed paths — may be inaccurate)",
-  "scope_identified_paths": "peaks/terraform/providers/aws/acceptance/misc/module.containers.eks.tf,peaks/terraform/providers/aws/acceptance/misc/variables.tf,...",
+  "scope_identified_paths": "infra/terraform/providers/aws/env/misc/module.containers.eks.tf,infra/terraform/providers/aws/env/misc/variables.tf,...",
   "plan": "1. Locate the cluster_version argument...",
   "validation_commands": "terraform fmt,terraform validate,terraform plan"
 }
