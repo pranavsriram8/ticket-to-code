@@ -1,5 +1,7 @@
 # Agent dependencies (GitHub Action)
-# Pin litellm to prevent supply-chain attacks (1.82.8 was malicious)
-litellm==1.81.16
+# Pin litellm — 1.82.8 was malicious, 1.83.0 fixes CVE-2026-35030 (CRITICAL)
+litellm==1.83.0
 boto3>=1.34.0
 PyGithub>=2.3.0
+ujson>=5.12.0          # CVE-2026-32874, CVE-2026-32875
+urllib3>=2.6.3         # CVE-2025-66418, CVE-2025-66471, CVE-2026-21441
