@@ -1,0 +1,8 @@
+# ──────────────────────────────────────────────
+# CODEOWNERS — TicketToCode
+# ──────────────────────────────────────────────
+# All changes require review from the repo owner.
+# This prevents unauthorized modifications to the
+# action code that runs inside consumer workflows.
+
+* @pranavsriram8
