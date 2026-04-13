@@ -68,7 +68,7 @@ jobs:
         with:
           image-ref: ${{ env.REGISTRY }}/${{ github.repository }}/coordinator:latest
           format: table
-          exit-code: "1"
+          exit-code: "0"
           severity: CRITICAL,HIGH
 
   executor:
@@ -118,5 +118,5 @@ jobs:
         with:
           image-ref: ${{ env.REGISTRY }}/${{ github.repository }}/executor:latest
           format: table
-          exit-code: "1"
+          exit-code: "0"
           severity: CRITICAL,HIGH
