@@ -46,9 +46,9 @@ USER appuser
 # Expose the FastAPI port
 EXPOSE 8000
 
-# Health check — uses the /health endpoint
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
+# Note: No HEALTHCHECK directive — Cloud Run uses its own startup/liveness
+# probes (TCP on port 8000). Docker HEALTHCHECK spawns child processes that
+# clutter logs with "Child process died" messages.
 
 # Run with uvicorn
 # - Workers: 1 — Cloud Run scales horizontally via instances, not workers.
