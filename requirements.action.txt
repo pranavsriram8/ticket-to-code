@@ -1,5 +1,5 @@
 # Agent dependencies (GitHub Action)
 # Pin litellm to prevent supply-chain attacks (1.82.8 was malicious)
-litellm==1.81.16
+litellm==1.83.0
 boto3>=1.34.0
 PyGithub>=2.3.0
