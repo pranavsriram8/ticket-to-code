@@ -69,6 +69,11 @@ class Settings(BaseSettings):
     AZURE_API_KEY: Optional[str] = None
 
     # ── Application Settings ──────────────────────────────────────────
+    # API key required for administrative endpoints (e.g., /api/dry-run).
+    # If set, requests must include `X-API-Key: <value>` header.
+    # If empty, admin endpoints are unprotected (dev mode only).
+    API_KEY: str = ""
+
     # Python logging verbosity.
     LOG_LEVEL: str = "INFO"
 

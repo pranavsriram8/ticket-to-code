@@ -24,6 +24,8 @@ from typing import AsyncIterator
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Response, status
 
+from fastapi.security import APIKeyHeader
+
 from app.coordination.dispatcher import process_ticket_task
 from app.core.config import Settings, get_settings
 from app.integration.github_models import IssueWebhookPayload
@@ -33,6 +35,25 @@ from app.integration.jira_webhook import verify_jira_webhook
 
 # ── Logger ────────────────────────────────────────────────────────────
 logger = logging.getLogger("ticket-to-code")
+
+# ── API Key Security ─────────────────────────────────────────────────
+_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+async def require_api_key(
+    api_key: str | None = Depends(_api_key_header),
+    settings: Settings = Depends(get_settings),
+) -> None:
+    """
+    FastAPI dependency that protects administrative endpoints with an API key.
+    If API_KEY is not configured, the check is skipped (dev mode).
+    """
+    if not settings.API_KEY:
+        return  # Dev mode — no key required
+    if not api_key or api_key != settings.API_KEY:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=401, detail="Invalid or missing API key.")
 
 
 # ── Application Lifespan ──────────────────────────────────────────────
@@ -59,6 +80,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 
 # ── FastAPI App ───────────────────────────────────────────────────────
+# Disable /docs and /redoc in production (when API_KEY is configured).
+_settings = get_settings()
+_is_production = bool(_settings.API_KEY)
+
 app = FastAPI(
     title="ticket-to-code",
     description=(
@@ -68,6 +93,9 @@ app = FastAPI(
     ),
     version="0.2.0",
     lifespan=lifespan,
+    docs_url=None if _is_production else "/docs",
+    redoc_url=None if _is_production else "/redoc",
+    openapi_url=None if _is_production else "/openapi.json",
 )
 
 
@@ -107,7 +135,12 @@ class DryRunRequest(BaseModel):
     task_description: str = ""
 
 
-@app.post("/api/dry-run", summary="Dry run: Route + Scope (no dispatch)", tags=["testing"])
+@app.post(
+    "/api/dry-run",
+    summary="Dry run: Route + Scope (no dispatch)",
+    tags=["testing"],
+    dependencies=[Depends(require_api_key)],
+)
 async def dry_run(req: DryRunRequest) -> dict:
     """
     Runs the full Router + Scope Identifier pipeline but does NOT dispatch
