@@ -63,9 +63,11 @@ endif
 
 # ── Dependencies ─────────────────────────────────────────────────────
 
-lock: ## Regenerate both lockfiles with pinned versions + hashes
-	python3 -m piptools compile --generate-hashes --output-file=requirements.lock requirements.txt
-	python3 -m piptools compile --generate-hashes --output-file=requirements.action.lock requirements.action.txt
+lock: ## Regenerate both lockfiles with pinned versions + hashes (inside Linux container for correct platform deps)
+	docker run --rm -v "$(CURDIR)":/work -w /work python:3.12-slim \
+		sh -c "pip install -q pip-tools && \
+			pip-compile --generate-hashes --output-file=requirements.lock requirements.txt && \
+			pip-compile --generate-hashes --output-file=requirements.action.lock requirements.action.txt"
 
 # ── Cleanup ──────────────────────────────────────────────────────────
 
