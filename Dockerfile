@@ -51,10 +51,11 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
 
 # Run with uvicorn
-# - Workers: 2 is fine for webhook processing (not CPU-heavy, mostly I/O-bound)
-# - Host 0.0.0.0: listen on all interfaces (required in Docker)
+# - Workers: 1 — Cloud Run scales horizontally via instances, not workers.
+#   Multiple workers cause OOM on 512Mi (dspy + litellm are heavy).
+# - Host 0.0.0.0: listen on all interfaces (required in containers)
 CMD ["python", "-m", "uvicorn", "app.main:app", \
      "--host", "0.0.0.0", \
      "--port", "8000", \
-     "--workers", "2", \
+     "--workers", "1", \
      "--log-level", "info"]
