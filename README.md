@@ -18,8 +18,8 @@
 
 ```
 ┌─────────┐      ┌────────────────────────────┐        ┌─────────────────────────┐      ┌───────────────┐
-│  Jira   │─────▶│  Agent 1 (Agentcore)       │─────▶  │  Agent 2 (GH Actions)   │─────▶│  Pull Request │
-│  (task) │      │  Router + Scope Identifier │        │  Executor + Validator   │      │  (for review) │
+│  Jira   │─────▶│  Coordinator               │─────▶  │  Executor (GH Actions)  │─────▶│  Pull Request │
+│  (task) │      │  Router + Scope Identifier │        │  Edits + Validator      │      │  (for review) │
 └─────────┘      └────────────────────────────┘        └─────────────────────────┘      └───────────────┘
      │                    │                                  │
      │  1. Label issue    │  2. Classify task (DSPy)         │  5. Read identified files
@@ -30,22 +30,63 @@
 
 ### Two-Agent Architecture
 
-| Agent | Where it runs | Responsibility |
-|-------|---------------|----------------|
-| **Agent 1** (Agentcore) | Docker / local server | ALL intelligence — routing, planning, scope identification |
-| **Agent 2** (Executor) | GitHub Actions | Pure executor — reads files, makes edits, validates, opens PR |
+| Agent | Image | Where it runs | Responsibility |
+|-------|-------|---------------|----------------|
+| **Coordinator** | `ghcr.io/.../coordinator` | Any container host (Cloud Run, ECS, self-hosted) | ALL intelligence — routing, planning, scope identification |
+| **Executor** | `ghcr.io/.../executor` | GitHub Actions | Pure executor — reads files, makes edits, validates, opens PR |
 
-**Agent 1** does all the thinking:
+**Coordinator** does all the thinking:
 1. Receives Jira webhook → classifies task type with DSPy
 2. Generates step-by-step execution plan
 3. **Scope Identifier**: Navigates the repo tree via GitHub Trees API (level-by-level, LLM picks which directory to drill into), then identifies exact file paths
 4. Dispatches to GitHub Actions with exact paths + plan
 
-**Agent 2** is a dumb executor:
-1. Reads the files Agent 1 identified
-2. **Scope Expansion**: Asks Claude if it needs any sibling files in the same directory (catches files Agent 1 missed from filenames alone)
+**Executor** is a dumb executor:
+1. Reads the files the Coordinator identified
+2. **Scope Expansion**: Asks Claude if it needs any sibling files in the same directory (catches files the Coordinator missed from filenames alone)
 3. Sends files + plan to Claude for code edits
 4. Writes changes, runs validation, commits, opens PR
+
+---
+
+## Docker Images
+
+Both images are published to **GHCR** (GitHub Container Registry) via the unified release workflow.
+
+| Image | Dockerfile | Dependencies | Purpose |
+|---|---|---|---|
+| `ghcr.io/pranavsriram8/ticket-to-code/coordinator` | `Dockerfile` | `requirements.lock` | Webhook server, router, scope identifier |
+| `ghcr.io/pranavsriram8/ticket-to-code/executor` | `Dockerfile.action` | `requirements.action.lock` | Reads files, edits code, opens PRs |
+
+### Releasing
+
+Both images are built and pushed together when you tag a release:
+
+```bash
+make release V=0.1.0
+# or manually:
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+This produces versioned + latest tags:
+```
+ghcr.io/pranavsriram8/ticket-to-code/coordinator:0.1.0   + :latest
+ghcr.io/pranavsriram8/ticket-to-code/executor:0.1.0      + :latest
+```
+
+The release workflow also runs **Trivy vulnerability scanning** on both images — the release fails if any CRITICAL or HIGH CVEs are found.
+
+### Supply-Chain Security
+
+- **Lockfiles with hashes** — `requirements.lock` and `requirements.action.lock` pin every dependency to an exact version with SHA-256 hashes
+- **`--require-hashes`** — pip refuses to install anything that doesn't match the lockfile (blocks tampered packages)
+- **Trivy scanning** — both images scanned for CVEs on every release
+- **GHCR** — images are tied to GitHub repo permissions, only repo collaborators can push
+
+To regenerate lockfiles after updating dependencies:
+```bash
+make lock
+```
 
 ---
 
@@ -181,6 +222,22 @@ curl -s -X POST http://localhost:8000/api/dry-run \
 
 ---
 
+## Deploying the Coordinator
+
+The coordinator is a standard Docker container that receives webhooks. Deploy it anywhere that can run containers:
+
+| Platform | How |
+|---|---|
+| **Google Cloud Run** | `gcloud run deploy --image=ghcr.io/.../coordinator:0.1.0` |
+| **AWS ECS / Fargate** | Task definition with the GHCR image |
+| **Azure Container Apps** | `az containerapp create --image ghcr.io/.../coordinator:0.1.0` |
+| **Self-hosted** | `docker run --env-file .env -p 8000:8000 ghcr.io/.../coordinator:latest` |
+| **Kubernetes** | Deployment + Service YAML with the GHCR image |
+
+The only requirement is an HTTPS endpoint that Jira can reach (for webhooks). Most platforms provide auto-TLS.
+
+---
+
 ## API Endpoints
 
 | Method | Path | Description |
@@ -217,15 +274,21 @@ ticket-to-code/
 │       └── github_executor.py     # GitHub Actions workflow_dispatch trigger
 ├── agent/
 │   ├── __init__.py
-│   └── entrypoint.py             # Agent 2 — runs in GitHub Actions (executor)
-├── action.yml                     # GitHub Action definition
-├── agent-ticket-to-code.yml       # Workflow template (copy to monorepo)
+│   └── entrypoint.py             # Executor — runs in GitHub Actions
+├── .github/
+│   └── workflows/
+│       └── release.yml            # Builds + pushes both images to GHCR on tag
+├── action.yml                     # GitHub Action definition (references executor image)
+├── agent-ticket-to-code.yml       # Workflow template (copy to your monorepo)
 ├── docker-compose.yml             # Local dev setup
-├── Dockerfile                     # Agent 1 container
-├── Dockerfile.action              # Agent 2 container (GitHub Actions)
+├── Dockerfile                     # Coordinator container
+├── Dockerfile.action              # Executor container (GitHub Actions)
+├── Makefile                       # Build, push, release, lock commands
+├── requirements.txt               # Coordinator dependencies (unpinned, human-editable)
+├── requirements.lock              # Coordinator lockfile (pinned + hashed)
+├── requirements.action.txt        # Executor dependencies (unpinned, human-editable)
+├── requirements.action.lock       # Executor lockfile (pinned + hashed)
 ├── .env.example
-├── requirements.txt               # Server dependencies
-├── requirements.action.txt        # Agent dependencies
 └── README.md
 ```
 
@@ -238,7 +301,7 @@ ticket-to-code/
 | **Integration** | `app/integration/` | Receives Jira/GitHub webhooks, verifies signatures, parses into typed models |
 | **Coordination** | `app/coordination/` | DSPy router classifies tasks, scope identifier finds files, dispatcher orchestrates |
 | **Execution** | `app/execution/` | Triggers GitHub Actions `workflow_dispatch` with the plan + exact paths |
-| **Agent** | `agent/` | GitHub Action that runs the AI agent — scope expansion, edits, validation, PRs |
+| **Agent** | `agent/` | GitHub Action that runs the executor — scope expansion, edits, validation, PRs |
 
 ---
 
@@ -256,7 +319,7 @@ The agent operates with strict safety boundaries:
 | `ansible-lint` | `rm`, `mv` on critical paths |
 | `go vet`, `go build` | Direct cloud API calls |
 
-- **Command allowlist** enforced in Agent 2
+- **Command allowlist** enforced in the Executor
 - **No merge capability** — only opens PRs for human review
 - **30-minute timeout** on the GitHub Action runner
 - **Concurrency control** — one run per Jira issue at a time
@@ -272,7 +335,26 @@ The agent operates with strict safety boundaries:
 - **LiteLLM** — model-agnostic LLM routing (OpenAI, Anthropic, Azure, Ollama)
 - **PyGithub** — GitHub API for workflow dispatch, PR creation, and Trees API
 - **GitHub Actions** — secure execution environment with CI/CD credentials
+- **GHCR** — container registry for both images (free for public repos)
+- **Trivy** — vulnerability scanning on every release
+- **pip-tools** — deterministic lockfiles with hash verification
 - **Docker Compose** — local development and testing
+
+---
+
+## Makefile
+
+```bash
+make help               # Show all commands
+make build-coordinator  # Build coordinator image locally
+make build-executor     # Build executor image locally
+make build-all          # Build both images
+make push-all           # Push both to GHCR
+make run-local          # Docker-compose for local dev
+make release V=0.1.0    # Tag + push (CI builds both images + scans)
+make lock               # Regenerate lockfiles with hashes
+make clean              # Remove local Docker images
+```
 
 ---
 

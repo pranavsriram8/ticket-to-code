@@ -58,7 +58,7 @@ inputs:
 
 runs:
   using: "docker"
-  image: "Dockerfile.action"
+  image: "docker://ghcr.io/pranavsriram8/ticket-to-code/executor:latest"
   env:
     GITHUB_TOKEN: ${{ inputs.github-token }}
     INPUT_JIRA_ISSUE_KEY: ${{ inputs.jira-issue-key }}

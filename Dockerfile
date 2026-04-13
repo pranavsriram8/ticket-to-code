@@ -19,8 +19,8 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends gcc && \
     rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+COPY requirements.lock .
+RUN pip install --no-cache-dir --prefix=/install --require-hashes -r requirements.lock
 
 # ── Stage 2: Runtime image ───────────────────────
 FROM python:3.12-slim AS runtime
