@@ -63,13 +63,22 @@ jobs:
           cache-from: type=gha,scope=coordinator
           cache-to: type=gha,scope=coordinator,mode=max
 
-      - name: "Scan for vulnerabilities"
+      - name: "Scan — block on CRITICAL"
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ github.repository }}/coordinator:latest
+          format: table
+          exit-code: "1"
+          severity: CRITICAL
+
+      - name: "Scan — report HIGH (non-blocking)"
+        if: always()
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ env.REGISTRY }}/${{ github.repository }}/coordinator:latest
           format: table
           exit-code: "0"
-          severity: CRITICAL,HIGH
+          severity: HIGH
 
   executor:
     name: "Build executor (Agent 2)"
@@ -113,10 +122,19 @@ jobs:
           cache-from: type=gha,scope=executor
           cache-to: type=gha,scope=executor,mode=max
 
-      - name: "Scan for vulnerabilities"
+      - name: "Scan — block on CRITICAL"
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ github.repository }}/executor:latest
+          format: table
+          exit-code: "1"
+          severity: CRITICAL
+
+      - name: "Scan — report HIGH (non-blocking)"
+        if: always()
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ env.REGISTRY }}/${{ github.repository }}/executor:latest
           format: table
           exit-code: "0"
-          severity: CRITICAL,HIGH
+          severity: HIGH
